@@ -1,0 +1,32 @@
+name: Build and Release .skill
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Package .skill file
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          zip -r "test-case-generator-${{ steps.version.outputs.tag }}.skill" \
+            SKILL.md scripts/ \
+            -x '*.git*'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: test-case-generator-${{ steps.version.outputs.tag }}.skill
+          generate_release_notes: true
