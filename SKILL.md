@@ -37,7 +37,7 @@ description: >
 ```bash
 python3 -c "
 import pandas as pd
-df = pd.read_csv('path/to/cases.csv', dtype=str, nrows=0)
+df = pd.read_csv('path/to/cases.csv', dtype=str, encoding='utf-8', nrows=0)
 cols = df.columns.tolist()
 standard = {'模块','用例名称','描述','预期','备注'}
 print('STANDARD' if standard.issubset(set(cols)) else 'CUSTOM')

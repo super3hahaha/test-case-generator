@@ -119,7 +119,7 @@ def style_data_cell(cell, red=False):
 # ── 主流程 ──────────────────────────────────────────────────
 
 def load_csv(path):
-    df = pd.read_csv(path, dtype=str).fillna('')
+    df = pd.read_csv(path, dtype=str, encoding='utf-8').fillna('')
     missing = [c for c in COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"CSV 缺少列：{missing}，请使用临时脚本模式处理非标准格式。")
