@@ -272,7 +272,7 @@ openpyxl 写入富文本有两个 bug，**必须用 XML 修补方式绕过**：
 
 | Bug | 现象 | 根因 |
 |-----|------|------|
-| 颜色透明 | 内容存在但不可见 | `InlineFont(color='FF0000')` 写入 `rgb="00FF0000"`，alpha=00 透明 |
+| 颜色透明 | 内容存在但不可见 | `InlineFont(color='EA4335')` 写入 `rgb="00EA4335"`，alpha=00 透明 |
 | 字体超大 | 内容撑满格子看不见 | `InlineFont(sz=1000)` 单位是半点，1000=500pt |
 
 **修复函数（必须包含在临时脚本中）：**
@@ -287,7 +287,7 @@ def fix_rich_text_xlsx(filepath):
         sheet_bytes = z.read('xl/worksheets/sheet1.xml')
         all_files = {n: z.read(n) for n in z.namelist()}
     fixed = sheet_bytes.replace(b'rgb="00000000"', b'rgb="FF000000"')
-    fixed = fixed.replace(b'rgb="00FF0000"', b'rgb="FFFF0000"')
+    fixed = fixed.replace(b'rgb="00EA4335"', b'rgb="FFEA4335"')
     fixed = fixed.replace(b'<sz val="1000"/>', b'<sz val="10"/>')
     all_files['xl/worksheets/sheet1.xml'] = fixed
     with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zout:
@@ -306,7 +306,7 @@ def make_rich_cell(cell, runs):
     # runs: list of (text, is_red)
     blocks = []
     for text, is_red in runs:
-        color = 'FF0000' if is_red else '000000'
+        color = 'EA4335' if is_red else '000000'
         ifont = InlineFont(rFont='Arial', sz=1000, color=color)
         blocks.append(TextBlock(ifont, text))
     cell.value = CellRichText(*blocks)
@@ -344,7 +344,7 @@ fix_rich_text_xlsx(output_path)
 1. **格式检测优先**：每次收到 CSV 后，第一步必须检测列名，决定走哪条路径
 2. **修改行必须保留全部原有内容**：只插入新增/变更部分并标红，不得丢弃原有步骤
 3. **颜色修复必须在 `wb.save()` 之后执行**
-4. **新增行整行用 `Font(color='FF0000')`**，不需要富文本
+4. **新增行整行用 `Font(color='EA4335')`**，不需要富文本
 5. **修改行只标红新增部分**，原有文字保持黑色
 6. **用词风格**：描述用简洁操作动词（查看/检查/点击），不用「是否为」判断句；预期直接写结论状态，不用模糊的「正确显示」，与原有用例颗粒度和句式保持一致
 7. **换行符**：步骤之间用 `\n` 分隔，配合 `wrap_text=True`

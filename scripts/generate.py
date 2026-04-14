@@ -48,6 +48,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 COLUMNS = ['模块', '用例名称', '描述', '预期', '备注']
 COL_WIDTHS = {'A': 18, 'B': 16, 'C': 50, 'D': 45, 'E': 14}
 HEADER_COLOR = '2F4F4F'
+RED_COLOR = 'EA4335'
 DEPRECATED_NOTE = '已废弃'
 NEW_ROW_MARKER = '__is_new__'   # 内部标记列，不写入 xlsx
 
@@ -64,7 +65,7 @@ def fix_rich_text_xlsx(filepath):
         all_files = {n: z.read(n) for n in z.namelist()}
 
     fixed = sheet_bytes.replace(b'rgb="00000000"', b'rgb="FF000000"')
-    fixed = fixed.replace(b'rgb="00FF0000"', b'rgb="FFFF0000"')
+    fixed = fixed.replace(b'rgb="00EA4335"', b'rgb="FFEA4335"')
     fixed = fixed.replace(b'<sz val="1000"/>', b'<sz val="10"/>')
 
     all_files['xl/worksheets/sheet1.xml'] = fixed
@@ -85,7 +86,7 @@ def make_rich_cell(cell, runs):
     """
     blocks = []
     for run in runs:
-        color = 'FF0000' if run['red'] else '000000'
+        color = RED_COLOR if run['red'] else '000000'
         ifont = InlineFont(rFont='Arial', sz=1000, color=color)
         blocks.append(TextBlock(ifont, run['text']))
     cell.value = CellRichText(*blocks)
@@ -111,7 +112,7 @@ def make_border():
 
 
 def style_data_cell(cell, red=False):
-    cell.font = Font(name='Arial', size=10, color='FF0000' if red else '000000')
+    cell.font = Font(name='Arial', size=10, color=RED_COLOR if red else '000000')
     cell.alignment = Alignment(wrap_text=True, vertical='top')
     cell.border = make_border()
 
