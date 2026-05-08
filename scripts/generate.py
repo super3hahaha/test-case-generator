@@ -42,7 +42,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 COLUMNS = ['模块', '用例名称', '描述', '预期', '备注']
@@ -98,23 +98,15 @@ def make_rich_cell(cell, runs):
 def style_header(ws):
     fill = PatternFill('solid', start_color=HEADER_COLOR)
     font = Font(bold=True, color='FFFFFF', name='Arial', size=10)
-    border = make_border()
     for cell in ws[1]:
         cell.fill = fill
         cell.font = font
-        cell.border = border
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-
-
-def make_border():
-    thin = Side(style='thin', color='AAAAAA')
-    return Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
 def style_data_cell(cell, red=False):
     cell.font = Font(name='Arial', size=10, color=RED_COLOR if red else '000000')
     cell.alignment = Alignment(wrap_text=True, vertical='top')
-    cell.border = make_border()
 
 
 # ── 主流程 ──────────────────────────────────────────────────
@@ -197,7 +189,6 @@ def build_xlsx(df, changes, output_path):
             if key in modified_map:
                 # 修改行：黑红混排富文本
                 make_rich_cell(cell, modified_map[key])
-                cell.border = make_border()
             elif is_new:
                 # 新增行：整行红色
                 style_data_cell(cell, red=True)
