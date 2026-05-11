@@ -2,15 +2,15 @@
 version: v1.3.2
 name: test-case-generator
 description: >
-  Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description/pptx,
+  Use this skill whenever the user provides an existing test case CSV/HTML and a new requirements screenshot/description/pptx,
   and wants to generate an updated Excel (.xlsx) test case file. The skill covers the full workflow:
   analyzing existing cases, comparing with new requirements, classifying changes (new / modified / deprecated),
   and outputting a formatted .xlsx where new or modified content is highlighted in red while original content
   stays black. Trigger whenever the user mentions "测试用例", "用例更新", "需求变更", "标红新增", or uploads a
-  CSV alongside a requirements image/pptx asking for an Excel output.
+  CSV/HTML alongside a requirements image/pptx asking for an Excel output.
 ---
 
-# Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
+# Test Case Generator: CSV/HTML + 需求截图/PPTX → 标红 xlsx
 
 ## ⚠️ 关键规则
 
@@ -18,13 +18,17 @@ description: >
 
 **检测到标准五列格式时，严禁从头编写 Python 脚本。** 必须直接使用本技能内置的 `scripts/generate.py`，你的工作只是构造 `changes.json` 然后调用它。自行编写脚本 = 错误执行。
 
-### 2. 输入用例必须是 CSV，拒绝 xlsx 输入
+### 2. 输入用例支持 CSV 和 HTML，拒绝 xlsx 输入
 
-**当用户提供 `.xlsx` / `.xls` 文件作为已有测试用例输入时，禁止直接读取。** 必须提醒用户转为 CSV 后再提供：
+**支持的输入格式：**
+- **CSV**：UTF-8 编码的 CSV 文件
+- **HTML**：Google Sheets 导出的 HTML 文件（通过「文件 → 下载 → 网页(.html)」导出），脚本自动处理 rowspan 合并单元格和 `<br>` 换行
 
-> "xlsx 文件包含多 sheet、合并单元格、格式信息等，直接解析不可控且浪费 token。请先将用例 sheet 另存为 CSV（UTF-8 编码）后再提供，我会用 CSV 作为输入。"
+**当用户提供 `.xlsx` / `.xls` 文件作为已有测试用例输入时，禁止直接读取。** 必须提醒用户转为 CSV 或 HTML 后再提供：
 
-只有拿到 CSV 文件后才继续执行后续步骤。
+> "xlsx 文件包含多 sheet、合并单元格、格式信息等，直接解析不可控且浪费 token。请先将用例 sheet 另存为 CSV（UTF-8 编码）或下载为网页（HTML）后再提供。"
+
+只有拿到 CSV 或 HTML 文件后才继续执行后续步骤。
 
 ---
 
@@ -32,8 +36,8 @@ description: >
 
 ```
 0. 【可选】若需求来源为 PPTX，先运行提取脚本（见 Step 0）
-1. 读取 CSV，检测列格式（bash 执行）
-2. 逐条阅读 CSV 全部用例内容，理解已有用例覆盖的细节
+1. 读取 CSV/HTML，检测列格式（bash 执行，自动识别文件类型）
+2. 逐条阅读全部用例内容，理解已有用例覆盖的细节
 3. 分析新需求（截图/文字描述/PPTX 提取内容），结合 CSV 已有内容对比补充
 4. 分类变更，构造 changes.json
 5. 【标准格式】直接调用 scripts/generate.py 生成 xlsx ← 唯一正确路径
@@ -83,23 +87,34 @@ python /mnt/skills/user/test-case-generator/scripts/extract_pptx.py \
 
 ---
 
-## Step 1：检测 CSV 格式，选择处理路径
+## Step 1：检测输入格式，选择处理路径
 
-**用 bash 读取列名，立即判断走哪条路：**
+**用 bash 读取列名（自动识别 CSV/HTML），立即判断走哪条路：**
 
 ```bash
 python3 -c "
-import pandas as pd
-df = pd.read_csv('path/to/cases.csv', dtype=str, encoding='utf-8', nrows=0)
-cols = df.columns.tolist()
+import os, pandas as pd
+path = 'path/to/cases.csv_or_html'
+ext = os.path.splitext(path)[1].lower()
+if ext in ('.html', '.htm'):
+    from bs4 import BeautifulSoup
+    with open(path, encoding='utf-8') as f:
+        soup = BeautifulSoup(f.read(), 'html.parser')
+    row0 = soup.find('tbody').find('tr')
+    cols = [td.get_text(strip=True) for td in row0.find_all('td')]
+    fmt = 'HTML'
+else:
+    df = pd.read_csv(path, dtype=str, encoding='utf-8', nrows=0)
+    cols = df.columns.tolist()
+    fmt = 'CSV'
 standard = {'模块','用例名称','描述','预期','备注'}
-print('STANDARD' if standard.issubset(set(cols)) else 'CUSTOM')
+print(f'{fmt} -> {\"STANDARD\" if standard.issubset(set(cols)) else \"CUSTOM\"}')
 print(cols)
 "
 ```
 
 **执行后必须在 chat 中输出检测结果，例如：**
-> 📂 CSV 格式检测：STANDARD，共 N 条用例，列名：模块、用例名称、描述、预期、备注
+> 📂 格式检测：CSV/HTML → STANDARD，共 N 条用例，列名：模块、用例名称、描述、预期、备注
 
 ### ✅ 输出 STANDARD → 强制走固定脚本路径
 
@@ -121,13 +136,13 @@ print(cols)
 
 ---
 
-## Step 2：逐条阅读 CSV，理解已有用例内容
+## Step 2：逐条阅读用例，理解已有用例内容
 
-> ⚠️ **CSV 不仅是格式模板，已有用例的内容也是新需求分析的重要参考和补充。**
+> ⚠️ **输入文件不仅是格式模板，已有用例的内容也是新需求分析的重要参考和补充。**
 
-在分析新需求之前，必须先完整阅读 CSV 中每一条用例的内容，理解已有用例覆盖了哪些细节：
+在分析新需求之前，必须先完整阅读输入文件中每一条用例的内容，理解已有用例覆盖了哪些细节：
 
-1. **逐条读取** CSV 中所有用例（模块、用例名称、描述、预期）
+1. **逐条读取** 所有用例（模块、用例名称、描述、预期）
 2. **理解已有细节**：CSV 中的用例可能包含需求文档/截图中未明确提到的具体信息（如具体的操作项、状态值、边界条件等）
 3. **作为新需求的补充**：当新需求只描述了大方向但缺少细节时，已有用例中的相关内容应作为补充纳入新生成的用例中
 
@@ -137,7 +152,7 @@ print(cols)
 > - 模块B（N条）：用例1、用例2、...
 > - CSV 中包含但需求文档未提及的内容：xxx
 
-**原则：CSV 中已有的用例是新需求分析的参考依据。新需求文档/截图未涉及的细节，如果 CSV 已有用例中包含，应视为有效需求保留或融入新用例。不得因为新需求未提及就丢弃 CSV 中已有的有效内容。**
+**原则：已有用例是新需求分析的参考依据。新需求文档/截图未涉及的细节，如果已有用例中包含，应视为有效需求保留或融入新用例。不得因为新需求未提及就丢弃已有的有效内容。**
 
 ---
 
@@ -298,10 +313,10 @@ print(cols)
 **不要自己写生成脚本。将 changes.json 写入磁盘后，直接运行以下命令：**
 
 ```bash
-pip install openpyxl pandas --break-system-packages -q
+pip install openpyxl pandas beautifulsoup4 --break-system-packages -q
 
 python /mnt/skills/user/test-case-generator/scripts/generate.py \
-  --input <csv路径> \
+  --input <csv或html路径> \
   --output output.xlsx \
   --changes changes.json
 ```
@@ -394,7 +409,7 @@ fix_rich_text_xlsx(output_path)
 
 ## 注意事项
 
-1. **格式检测优先**：每次收到 CSV 后，第一步必须检测列名，决定走哪条路径
+1. **格式检测优先**：每次收到 CSV/HTML 后，第一步必须检测列名，决定走哪条路径
 2. **修改行必须保留全部原有内容**：只插入新增/变更部分并标红，不得丢弃原有步骤
 3. **颜色修复必须在 `wb.save()` 之后执行**
 4. **新增行整行用 `Font(color='EA4335')`**，不需要富文本
