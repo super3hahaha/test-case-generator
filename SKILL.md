@@ -1,32 +1,85 @@
 ---
+version: v1.3.2
 name: test-case-generator
 description: >
-  Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description,
+  Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description/pptx,
   and wants to generate an updated Excel (.xlsx) test case file. The skill covers the full workflow:
   analyzing existing cases, comparing with new requirements, classifying changes (new / modified / deprecated),
   and outputting a formatted .xlsx where new or modified content is highlighted in red while original content
   stays black. Trigger whenever the user mentions "测试用例", "用例更新", "需求变更", "标红新增", or uploads a
-  CSV alongside a requirements image asking for an Excel output.
+  CSV alongside a requirements image/pptx asking for an Excel output.
 ---
 
-# Test Case Generator: CSV + 需求截图 → 标红 xlsx
+# Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
-## ⚠️ 关键规则：禁止自行编写 xlsx 生成脚本
+## ⚠️ 关键规则
+
+### 1. 禁止自行编写 xlsx 生成脚本
 
 **检测到标准五列格式时，严禁从头编写 Python 脚本。** 必须直接使用本技能内置的 `scripts/generate.py`，你的工作只是构造 `changes.json` 然后调用它。自行编写脚本 = 错误执行。
+
+### 2. 输入用例必须是 CSV，拒绝 xlsx 输入
+
+**当用户提供 `.xlsx` / `.xls` 文件作为已有测试用例输入时，禁止直接读取。** 必须提醒用户转为 CSV 后再提供：
+
+> "xlsx 文件包含多 sheet、合并单元格、格式信息等，直接解析不可控且浪费 token。请先将用例 sheet 另存为 CSV（UTF-8 编码）后再提供，我会用 CSV 作为输入。"
+
+只有拿到 CSV 文件后才继续执行后续步骤。
 
 ---
 
 ## 整体流程
 
 ```
+0. 【可选】若需求来源为 PPTX，先运行提取脚本（见 Step 0）
 1. 读取 CSV，检测列格式（bash 执行）
 2. 逐条阅读 CSV 全部用例内容，理解已有用例覆盖的细节
-3. 分析新需求（截图或文字描述），结合 CSV 已有内容对比补充
+3. 分析新需求（截图/文字描述/PPTX 提取内容），结合 CSV 已有内容对比补充
 4. 分类变更，构造 changes.json
 5. 【标准格式】直接调用 scripts/generate.py 生成 xlsx ← 唯一正确路径
    【非标准格式】临时生成脚本（见 Step 6）
 ```
+
+---
+
+## Step 0：PPTX 需求文档预处理（可选）
+
+当用户提供 `.pptx` 文件作为需求来源时，按以下流程处理：
+
+### Step 0.1：查询页数，确认范围
+
+**用户未指定页码时，禁止直接全量提取。** 必须先查询页数并询问用户：
+
+```bash
+pip install python-pptx PyMuPDF --break-system-packages -q
+
+python /mnt/skills/user/test-case-generator/scripts/extract_pptx.py \
+  --input <pptx路径> --info
+```
+
+拿到页数后，**必须询问用户**：
+> "这个 PPTX 共 N 页，请问需要分析哪几页？（如 1-3,5）全部提取会消耗较多 token，建议只选需求相关的页。"
+
+如果用户已明确指定了页码范围（如"帮我看第 3-7 页"），可跳过询问直接进入 Step 0.2。
+
+### Step 0.2：导出为整页截图
+
+```bash
+python /mnt/skills/user/test-case-generator/scripts/extract_pptx.py \
+  --input <pptx路径> \
+  --slides <用户指定的页码范围> \
+  --outdir pptx_output
+```
+
+**系统依赖：** 需安装 [LibreOffice](https://www.libreoffice.org/download/)（用于 pptx → pdf 转换）
+
+**参数说明：**
+- `--slides`：页码范围（如 `1-3,5,7-9`）
+- `--outdir`：图片输出目录，默认 `pptx_output`
+- `--dpi`：导出分辨率，默认 200
+
+**提取后的处理方式：**
+脚本将每页幻灯片导出为一张完整的 PNG 图片（包含文字、原型图、排版布局），效果等同于手动截图。导出后**必须用 Read 工具逐张查看这些图片**，然后进入 Step 3 的需求分析。
 
 ---
 
