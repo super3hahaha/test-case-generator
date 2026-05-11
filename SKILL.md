@@ -1,5 +1,5 @@
 ---
-version: v1.3.2
+version: v1.3.3
 name: test-case-generator
 description: >
   Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description/pptx,
@@ -35,7 +35,9 @@ description: >
 1. 读取 CSV，检测列格式（bash 执行）
 2. 逐条阅读 CSV 全部用例内容，理解已有用例覆盖的细节
 3. 分析新需求（截图/文字描述/PPTX 提取内容），结合 CSV 已有内容对比补充
+3.5 覆盖率自检，确保所有需求功能点都有用例覆盖
 4. 分类变更，构造 changes.json
+4.5 回溯 3.5 核对表，验证每个功能点在 JSON 中有对应条目
 5. 【标准格式】直接调用 scripts/generate.py 生成 xlsx ← 唯一正确路径
    【非标准格式】临时生成脚本（见 Step 6）
 ```
@@ -290,6 +292,30 @@ print(cols)
 - `modified[].runs`：富文本段落，`red: true` 为红色新增内容
 - `new_rows[].after_module`：插入到哪个模块的最后一行下方（脚本自动追踪行号并标红，无需手动传入）
 - `deprecated`：CSV 原始数据行索引（0-based，不计新增行），对应行备注列追加"已废弃"
+
+---
+
+## Step 4.5：changes.json 覆盖率复核（必须执行）
+
+> ⚠️ **changes.json 构建完成后，必须回溯 Step 3.5 的核对表，逐条验证每个需求功能点在 JSON 中有对应条目。**
+
+Step 3.5 确认了所有需求功能点都有用例覆盖，但在 Step 4 将分析结果转化为 JSON 结构时，仍可能遗漏条目（如漏写某条 modified、new_rows 条目不完整等）。因此需要二次复核：
+
+1. **回溯 Step 3.5 核对表**：逐条检查每个标记为"已覆盖"或"新增用例"的功能点
+2. **在 changes.json 中定位对应条目**：
+   - 修改类功能点 → 对应 `modified` 中是否有相应 row/col 条目
+   - 新增类功能点 → 对应 `new_rows` 中是否有相应用例
+   - 废弃类功能点 → 对应 `deprecated` 中是否有相应行号
+3. **标记遗漏**：找不到对应 JSON 条目的功能点，必须立即补充到 changes.json
+4. **输出复核结果**：在 chat 中输出复核表，格式如下：
+
+| 需求功能点 | Step 3.5 状态 | JSON 落地 | 位置 |
+|-----------|-------------|-----------|------|
+| 功能A | 修改用例 | ✅ | modified row 5 col C |
+| 功能B | 新增用例 | ✅ | new_rows "模块X" |
+| 功能C | 新增用例 | ❌ 遗漏 | → 已补充到 new_rows |
+
+**只有全部功能点都在 JSON 中落地后，才能进入 Step 5。**
 
 ---
 
