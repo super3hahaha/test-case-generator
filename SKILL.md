@@ -12,6 +12,8 @@ description: >
 
 # Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
+**当前版本：v1.4.0**
+
 ## ⚠️ 关键规则
 
 ### 1. 禁止自行编写 xlsx 生成脚本
