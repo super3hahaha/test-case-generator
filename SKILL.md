@@ -1,5 +1,4 @@
 ---
-version: v1.4.0
 name: test-case-generator
 description: >
   Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description/pptx,
@@ -12,7 +11,7 @@ description: >
 
 # Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
-**当前版本：v1.4.0**
+**当前版本：v1.5.0**
 
 ## ⚠️ 关键规则
 
@@ -44,6 +43,45 @@ description: >
 
 > 原则：宁可多问一句，不可编造一字。输出的每一条用例内容都必须有明确依据——来自需求文档、已有 CSV、或用户的回复。
 
+### 4. modified 条目必须用 module+case 定位，严禁使用 row 行号
+
+**这是最容易出错的规则，必须严格遵守。**
+
+`generate.py` 处理 `new_rows` 时会向 DataFrame 插入新行并重置 index，导致之后所有行的 Excel 行号发生偏移。如果 `modified` 里写死 `row` 数字，插入新行后必然命中错误的行，造成"修改没有生效"的 bug——**而且不会报错，极难排查**。
+
+```python
+# ✅ 正确：用 module+case 定位，generate.py 插入新行后自动重新查找，永远不偏移
+{"module": "撤销/重做", "case": "重做（Redo）", "col": "C", "runs": [...]}
+
+# ❌ 严禁：写死行号，只要有 new_rows 插入就必然偏移出错
+{"row": 47, "col": "C", "runs": [...]}
+```
+
+`generate.py` 在完成所有 `new_rows` 插入后，会自动构建 `(module填充值, case) → excel_row` 查找表，`modified` 条目按此表精确定位，无论插入多少新行、插在哪里都不受影响。
+
+### 5. changes.json 必须用 Python dict + json.dump() 生成，禁止手写 JSON 文本
+
+直接手写 JSON 文件时，字符串内的中文引号（如 `"Cutter"`）、反斜杠等特殊字符会破坏 JSON 语法，导致解析报错。
+
+```python
+# ✅ 正确：始终用 Python dict 构建数据，json.dump() 负责所有转义
+import json
+changes = {
+    "modified": [
+        {"module": "裁剪页", "case": "UI", "col": "C", "runs": [
+            {"text": '文案"Cutter"（删除文件名）', "red": True}
+        ]}
+    ],
+    "new_rows": [],
+    "deprecated": []
+}
+with open('changes.json', 'w', encoding='utf-8') as f:
+    json.dump(changes, f, ensure_ascii=False, indent=2)
+
+# ❌ 禁止：手写 JSON 文本，中文引号、特殊字符会破坏语法
+# create_file("changes.json", '{"text": "文案"Cutter"", "red": true}')
+```
+
 ---
 
 ## 整体流程
@@ -54,7 +92,7 @@ description: >
 2. 逐条阅读 CSV 全部用例内容，理解已有用例覆盖的细节
 3. 分析新需求（截图/文字描述/PPTX 提取内容），结合 CSV 已有内容对比补充
 3.5 覆盖率自检，确保所有需求功能点都有用例覆盖
-4. 分类变更，构造 changes.json（标准格式）或准备用例数据（非标准格式）
+4. 分类变更，用 Python dict 构造 changes.json（标准格式）或准备用例数据（非标准格式）
 4.5 回溯 3.5 核对表，验证每个功能点在最终产物中有对应落地（标准 & 非标准均执行）
 5. 【标准格式】直接调用 scripts/generate.py 生成 xlsx ← 唯一正确路径
    【非标准格式】临时生成脚本（见 Step 6）
@@ -198,7 +236,6 @@ print(cols)
 > "需求提到「xxx与线上版本一致」，CSV 中该模块已有以下用例：
 > - 用例1：xxx
 > - 用例2：xxx
-> - ...
 >
 > 请问这部分用例要怎么处理？例如：
 > 1. 参考旧用例的详细步骤，融入到新用例中
@@ -209,8 +246,9 @@ print(cols)
 4. 不得自行决定保留、删除或修改这些用例
 
 ### ✏️ 修改用例
-原有用例逻辑发生变化，找到对应 row，修改描述或预期。
-- 记录：哪一行（Excel 行号，1=header，2=第一条数据）、哪列（C/D/E）、原文、新增内容
+
+原有用例逻辑发生变化，找到对应用例，修改描述或预期。
+- 记录：哪个模块（`module`）、哪条用例（`case`）、哪列（C/D/E）、原文、新增内容
 
 > ⚠️ **严格禁止删除原有步骤**：修改某一行时，必须保留该单元格内**所有原有步骤**，不得删除或省略任何未发生变更的内容。只将新增或变更的部分插入到正确位置并标红，其余保持原样（黑色）。
 
@@ -218,31 +256,27 @@ print(cols)
 
 当 Before/After 对比发现某个 UI 元素被移除时，**不要删除原有用例中的相关描述**，而是在原文后追加标红的「（已移除）」标注。
 
-示例：原用例描述包含「顶部 pro 图标以黄色皇冠显示」，新版本移除了该元素：
+示例：
 
 ```
 描述列原文：检查顶部 pro 图标以黄色皇冠显示
 修改后：    检查顶部 pro 图标以黄色皇冠显示（已移除）  ← 「（已移除）」为红色
-
-预期列原文：顶部显示黄色皇冠图标
-修改后：    顶部显示黄色皇冠图标（已移除）  ← 「（已移除）」为红色
 ```
 
-对应 changes.json 写法：
+对应 changes.json 写法（用 module+case，不用 row）：
 
-```json
+```python
 {
-  "row": 5, "col": "C",
-  "runs": [
-    {"text": "1. 检查顶部 pro 图标以黄色皇冠显示", "red": false},
-    {"text": "（已移除）", "red": true}
-  ]
+    "module": "裁剪页", "case": "UI", "col": "C",
+    "runs": [
+        {"text": "1. 检查顶部 pro 图标以黄色皇冠显示", "red": False},
+        {"text": "（已移除）", "red": True}
+    ]
 }
 ```
 
-这样做的好处：保留历史痕迹，审阅者能清楚看到哪些内容是从旧版本移除的。
-
 ### ➕ 新增用例
+
 新需求中未被任何原有用例覆盖的逻辑，包括：
 - 正向路径（happy path）
 - 异常/边界分支
@@ -265,6 +299,7 @@ print(cols)
 **对应关系**：描述第N步 → 预期第N条，编号一一对应。
 
 ### 🚫 废弃用例
+
 新版本下线的功能，标记对应用例备注列注明"已废弃"。
 
 **用词风格要求：与原有用例保持绝对一致，颗粒度相同。**
@@ -286,7 +321,6 @@ print(cols)
 |-----------|---------|---------|
 | 铃声专辑-Set as Ringtone | 已覆盖 | 设置面板-铃声专辑 |
 | 提示音-Set as Low Battery Alert | 遗漏 | -> 新增用例 |
-| 点击交互-缓冲状态 | 遗漏 | -> 新增用例 |
 
 **只有全部功能点都标记为 ✅ 后，才能进入 Step 4。**
 
@@ -294,63 +328,66 @@ print(cols)
 
 ## Step 4：构建 changes.json（标准格式专用）
 
-整理变更数据为以下 JSON 结构，保存为 `changes.json`：
+**必须用 Python dict + `json.dump()` 生成，禁止手写 JSON 文本（见关键规则5）。**
 
-```json
-{
-  "modified": [
-    {
-      "row": 2,
-      "col": "C",
-      "runs": [
-        {"text": "1. 原有步骤一\n", "red": false},
-        {"text": "2. 新增步骤\n", "red": true},
-        {"text": "3. 原有步骤三", "red": false}
-      ]
-    }
-  ],
-  "new_rows": [
-    {
-      "after_module": "Go Premium入口",
-      "data": {
-        "模块": "Go Premium入口",
-        "用例名称": "会员入口文案",
-        "描述": "1. 检查入口文案\n2. 检查跳转",
-        "预期": "1. 文案正确\n2. 正常跳转",
-        "备注": ""
-      }
-    }
-  ],
-  "deprecated": [3]
+```python
+import json
+
+changes = {
+    "modified": [
+        {
+            "module": "裁剪页",    # 模块名，与 CSV 模块列填充后的值一致
+            "case": "UI",          # 用例名称，与 CSV 用例名称列完全一致
+            "col": "C",            # 列字母（A/B/C/D/E）
+            "runs": [
+                {"text": "1. 原有步骤一\n", "red": False},
+                {"text": "2. 新增步骤\n", "red": True},
+                {"text": "3. 原有步骤三", "red": False}
+            ]
+        }
+    ],
+    "new_rows": [
+        {
+            "after_module": "Go Premium入口",
+            "data": {
+                "模块": "Go Premium入口",
+                "用例名称": "会员入口文案",
+                "描述": "1. 检查入口文案\n2. 检查跳转",
+                "预期": "1. 文案正确\n2. 正常跳转",
+                "备注": ""
+            }
+        }
+    ],
+    "deprecated": [3]   # CSV 原始数据行索引（0-based，不计新增行）
 }
+
+with open('changes.json', 'w', encoding='utf-8') as f:
+    json.dump(changes, f, ensure_ascii=False, indent=2)
 ```
 
 字段说明：
-- `modified[].row`：Excel 行号（1=header，2=第一条数据）
+- `modified[].module`：模块名（CSV 模块列填充后的实际值，不能是空字符串）
+- `modified[].case`：用例名称（与 CSV 用例名称列完全一致）
 - `modified[].col`：列字母（A/B/C/D/E）
-- `modified[].runs`：富文本段落，`red: true` 为红色新增内容
-- `new_rows[].after_module`：插入到哪个模块的最后一行下方（脚本自动追踪行号并标红，无需手动传入）
+- `modified[].runs`：富文本段落，`red: True` 为红色新增内容
+- `new_rows[].after_module`：插入到哪个模块的最后一行下方（脚本自动追踪行号并标红）
 - `deprecated`：CSV 原始数据行索引（0-based，不计新增行），对应行备注列追加"已废弃"
 
 ---
 
 ## Step 4.5：覆盖率复核（标准格式和非标准格式均必须执行）
 
-> ⚠️ **在生成最终产物（changes.json 或临时脚本）之前，必须回溯 Step 3.5 的核对表，逐条验证每个需求功能点在即将生成的内容中有对应落地。**
-
-Step 3.5 确认了所有需求功能点都有用例覆盖，但在将分析结果转化为最终产物时，仍可能遗漏条目。因此需要二次复核：
+> ⚠️ **在生成最终产物之前，必须回溯 Step 3.5 的核对表，逐条验证每个需求功能点在即将生成的内容中有对应落地。**
 
 1. **回溯 Step 3.5 核对表**：逐条检查每个标记为"已覆盖"或"新增用例"的功能点
-2. **在即将生成的内容中定位对应条目**：
-   - **标准格式**：检查 changes.json 中是否有对应的 `modified` / `new_rows` / `deprecated` 条目
-   - **非标准格式**：检查临时脚本中即将写入的用例数据是否覆盖了该功能点
+2. **在即将生成的内容中定位对应条目**：检查 changes.json 中是否有对应的 `modified` / `new_rows` / `deprecated` 条目
 3. **标记遗漏**：找不到对应条目的功能点，必须立即补充
-4. **输出复核结果**：在 chat 中输出复核表，格式如下：
+4. **输出复核结果**：
 
 | 需求功能点 | Step 3.5 状态 | 落地状态 | 位置 |
 |-----------|-------------|---------|------|
-| 功能A | 修改用例 | ✅ | modified row 5 col C / 脚本第N条 |
-| 功能B | 新增用例 | ✅ | new_rows "模块X" / 脚本新增行 |
+| 功能A | 修改用例 | ✅ | modified module=裁剪页 case=UI col=C |
+| 功能B | 新增用例 | ✅ | new_rows after_module=裁剪页 |
 | 功能C | 新增用例 | ❌ 遗漏 | → 已补充 |
 
 **只有全部功能点都确认落地后，才能进入 Step 5 或 Step 6。**
@@ -371,6 +408,7 @@ python /mnt/skills/user/test-case-generator/scripts/generate.py \
 ```
 
 脚本已内置处理所有细节，无需额外代码：
+- 插入所有 `new_rows` 后自动构建 `(module, case) → excel_row` 查找表，`modified` 按 module+case 精确定位，不受行号偏移影响
 - 新增行插入到正确模块位置并整行标红
 - 修改行黑红混排富文本
 - 废弃行备注标注"已废弃"
@@ -465,3 +503,4 @@ fix_rich_text_xlsx(output_path)
 5. **修改行只标红新增部分**，原有文字保持黑色
 6. **用词风格**：描述用简洁操作动词（查看/检查/点击），不用「是否为」判断句；预期直接写结论状态，不用模糊的「正确显示」，与原有用例颗粒度和句式保持一致
 7. **换行符**：步骤之间用 `\n` 分隔，配合 `wrap_text=True`
+8. **module 字段必须是填充后的值**：CSV 中模块列空值表示同上，`module` 字段必须填写实际模块名（如 `"裁剪"`），不能是空字符串
