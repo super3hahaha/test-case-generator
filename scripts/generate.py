@@ -12,24 +12,15 @@ changes.json 格式：
       "module": "撤销/重做",
       "case": "重做（Redo）",
       "col": "C",
-      "runs": [
-        {"text": "1. 原有步骤\n", "red": false},
-        {"text": "2. 新增步骤\n", "red": true}
-      ]
+      "runs": [...]
     }
   ],
-  "new_rows": [
-    {
-      "after_module": "模块名称",
-      "data": {"模块": "Go Premium入口", "用例名称": "会员入口文案", "描述": "...", "预期": "...", "备注": ""}
-    }
-  ],
-  "deprecated": [2, 5]
+  ...
 }
 
 注意：
-- modified 使用 module+case 定位行，不受新行插入影响，无需手动计算行号偏移
-- deprecated 为 CSV 数据行索引（0-based）
+- modified 使用 module+case 定位行，不受新行插入影响
+- case 字段始终填写 CSV 原始用例名称（即使 B 列同时有改名条目）
 - 兼容旧版 row 字段（若无 module/case 则回退到 row 定位）
 """
 
@@ -116,35 +107,62 @@ def insert_new_rows(df, new_rows):
     for item in new_rows:
         module = item['after_module']
         row_data = item['data']
+        # 매번 df_filled를 재계산하여 이미 삽입된 새 행들의 모듈명도 반영
         df_filled = df.copy()
-        df_filled['模块'] = df_filled['模块'].replace('', None).ffill()
+        # 빈 모듈명 ffill: 단, 새로 삽입된 행은 모듈명이 이미 채워져 있음
+        filled_module = df_filled['模块'].copy()
+        last = ''
+        for i in df_filled.index:
+            val = filled_module.iloc[i]
+            if val and val != '':
+                last = val
+            else:
+                filled_module.iloc[i] = last
+        df_filled['模块'] = filled_module
         mask = df_filled['模块'] == module
         insert_pos = df_filled[mask].index[-1] + 1 if mask.any() else len(df)
         new_row = {c: row_data.get(c, '') for c in COLUMNS}
         new_row[NEW_ROW_MARKER] = True
         new_df = pd.DataFrame([new_row])
         df = pd.concat([df.iloc[:insert_pos], new_df, df.iloc[insert_pos:]], ignore_index=True)
+        df = df.reset_index(drop=True)
     return df
 
 
 def resolve_modified_map(df, modified_list):
     """
     将 modified 列表解析为 {(excel_row, col_letter): runs} 映射。
+
     支持两种定位方式：
-      1. module + case（推荐）：插入新行后自动定位，不受行号偏移影响
+      1. module + case（推荐）：插入新行后自动定位
       2. row（兼容旧格式）：直接用 Excel 行号
+
+    特殊处理：当同一用例同时有 col=B（改名）和其他列的条目时，
+    col=B 的改名不影响其他列用原始 case 名查找——
+    查找表同时记录原始 case 和改名后的 case，两者都能命中同一行。
     """
-    # 构建 (module, case) -> excel_row 查找表
-    # 先将模块列空值向下填充（还原合并单元格）
     df_filled = df.copy()
     df_filled['模块'] = df_filled['模块'].replace('', None).ffill()
 
-    lookup = {}  # (module_filled, case) -> excel_row
+    # 先收集所有 B 列改名：(module, old_case) -> new_case
+    rename_map = {}
+    for mod in modified_list:
+        if mod.get('col') == 'B' and 'module' in mod and 'case' in mod:
+            new_name = ''.join(r['text'] for r in mod['runs'])
+            rename_map[(mod['module'].strip(), mod['case'].strip())] = new_name
+
+    # 建立 lookup：(module_filled, case) -> excel_row
+    # 同时为改名的条目登记新旧两个 case 名
+    lookup = {}
     for df_idx, row in df_filled.iterrows():
         excel_row = df_idx + 2
         mod = str(row['模块']).strip()
         case = str(row['用例名称']).strip()
         lookup[(mod, case)] = excel_row
+        # 如果这行被改名，也用新名注册
+        if (mod, case) in rename_map:
+            new_case = rename_map[(mod, case)]
+            lookup[(mod, new_case)] = excel_row
 
     modified_map = {}
     for mod in modified_list:
@@ -158,10 +176,9 @@ def resolve_modified_map(df, modified_list):
                 continue
             excel_row = lookup[key_lookup]
         elif 'row' in mod:
-            # 兼容旧格式
             excel_row = mod['row']
         else:
-            print(f"⚠️  警告：modified 条目缺少 module+case 或 row 字段，跳过：{mod}")
+            print(f"⚠️  警告：modified 条目缺少 module+case 或 row 字段，跳过")
             continue
 
         modified_map[(excel_row, col)] = runs
@@ -171,11 +188,7 @@ def resolve_modified_map(df, modified_list):
 
 def build_xlsx(df, changes, output_path):
     deprecated_rows = set(changes.get('deprecated', []))
-
-    # 先插入新行
     df = insert_new_rows(df, changes.get('new_rows', []))
-
-    # 插入新行后再解析行号映射（module+case 定位在这里生效）
     modified_map = resolve_modified_map(df, changes.get('modified', []))
 
     wb = Workbook()
