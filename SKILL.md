@@ -11,7 +11,29 @@ description: >
 
 # Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
-**当前版本：v1.6.0**
+**当前版本：v1.7.0**
+
+## 第零步：加载产品偏好（可选）
+
+skill 支持按产品加载差异化偏好，偏好文件存放于：
+
+```
+references/
+└── <产品名>/
+    └── preferences.md   ← 该产品的偏好与约定
+```
+
+**触发规则**：上下文中可识别产品名称时（如用户提到「XRecorder」、CSV 文件名含产品名等）→ **自动读取**对应 `preferences.md`，将其中的颗粒度、分群、模块命名等约定应用于后续所有分析与输出。
+
+**已有偏好文件**：
+
+| 产品 | 路径 |
+|------|------|
+| XRecorder | `references/XRecorder/preferences.md` |
+
+> 💡 新增产品：在 `references/` 下新建 `<产品名>/preferences.md`，参考 XRecorder 模板编写。
+
+---
 
 ## ⚠️ 关键规则
 
@@ -419,18 +441,38 @@ with open('changes.json', 'w', encoding='utf-8') as f:
 
 ---
 
-## Step 5：调用固定脚本（标准格式，必须执行此步骤）
+## Step 5：调用固定脚本（必须执行此步骤，禁止自己写生成脚本）
 
-**不要自己写生成脚本。将 changes.json 写入磁盘后，直接运行以下命令：**
+**将 changes.json 写入磁盘后，根据 CSV 格式选择对应脚本：**
 
 ```bash
 pip install openpyxl pandas --break-system-packages -q
+```
 
+### 标准五列格式（模块 | 用例名称 | 描述 | 预期 | 备注）
+
+```bash
 python /mnt/skills/user/test-case-generator/scripts/generate.py \
   --input <csv路径> \
   --output output.xlsx \
   --changes changes.json
 ```
+
+### XRecorder 格式（模块 | 用例名称 | 操作 | 预期 | 优先级 | 备注）
+
+```bash
+python /mnt/skills/user/test-case-generator/scripts/generate_xrecorder.py \
+  --input <csv路径> \
+  --output output.xlsx \
+  --changes changes.json
+```
+
+**XRecorder changes.json 差异说明：**
+- `modified[].case`：用「用例名称」定位（无需 module 字段）
+- `modified[].col`：A=模块 B=用例名称 C=操作 D=预期 E=优先级 F=备注
+- `new_rows[].after_case`：插入到此用例名称正下方（替代 after_module）
+- `deprecated`：填用例名称字符串列表（替代行索引）
+- 示例文件：`references/XRecorder/changes_example.json`
 
 脚本已内置处理所有细节，无需额外代码：
 - 插入所有 `new_rows` 后自动构建 `(module, case) → excel_row` 查找表，`modified` 按 module+case 精确定位，不受行号偏移影响
