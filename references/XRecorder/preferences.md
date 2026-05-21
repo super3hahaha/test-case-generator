@@ -86,3 +86,30 @@
 | 日期 | 更新内容 |
 |------|---------|
 | 2026-05-15 | 初始版本，基于「隐形悬浮球」用例生成对比经验整理 |
+
+---
+
+## generate_xrecorder.py 调用方式与 changes.json 差异说明
+### 列格式：模块 | 用例名称 | 操作 | 预期 | 优先级 | 备注
+
+```bash
+python /mnt/skills/user/test-case-generator/scripts/generate_xrecorder.py \
+  --input <csv路径> \
+  --output output.xlsx \
+  --changes changes.json
+```
+
+**XRecorder changes.json 差异说明：**
+- `modified[].case`：用「用例名称」定位（无需 module 字段）
+- `modified[].col`：A=模块 B=用例名称 C=操作 D=预期 E=优先级 F=备注
+- `new_rows[].after_case`：插入到此用例名称正下方（替代 after_module）
+- `deprecated`：填用例名称字符串列表（替代行索引）
+- 示例文件：`references/XRecorder/changes_example.json`
+
+脚本已内置处理所有细节，无需额外代码：
+- 插入所有 `new_rows` 后自动构建 `(module, case) → excel_row` 查找表，`modified` 按 module+case 精确定位，不受行号偏移影响
+- 新增行插入到正确模块位置并整行标红
+- 修改行黑红混排富文本
+- 废弃行备注标注"已废弃"
+- 富文本颜色/字号 bug 自动修复
+- 表头样式、列宽、行高

@@ -1,17 +1,18 @@
 ---
 name: test-case-generator
 description: >
-  Use this skill whenever the user provides an existing test case CSV and a new requirements screenshot/description/pptx,
-  and wants to generate an updated Excel (.xlsx) test case file. The skill covers the full workflow:
-  analyzing existing cases, comparing with new requirements, classifying changes (new / modified / deprecated),
-  and outputting a formatted .xlsx where new or modified content is highlighted in red while original content
-  stays black. Trigger whenever the user mentions "测试用例", "用例更新", "需求变更", "标红新增", or uploads a
-  CSV alongside a requirements image/pptx asking for an Excel output.
+  Use this skill whenever the user wants to generate test cases from requirements — whether or not an existing CSV
+  is provided. When a CSV is provided: analyze existing cases, compare with new requirements, classify changes
+  (new / modified / deprecated), and output a formatted .xlsx where new/modified content is highlighted in red.
+  When NO CSV is provided: treat it as brand-new requirements and generate a fresh .xlsx with all cases in the
+  standard five-column format (模块 | 用例名称 | 描述 | 预期 | 备注) in a new sheet, with all rows in red.
+  Trigger whenever the user mentions "测试用例", "用例更新", "需求变更", "标红新增", "生成用例", "帮我写用例",
+  or uploads/describes requirements asking for an Excel test case output — even without any existing CSV.
 ---
 
 # Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
-**当前版本：v1.7.0**
+**当前版本：v1.8.0**
 
 ## 第零步：加载产品偏好（可选）
 
@@ -41,13 +42,13 @@ references/
 
 **检测到标准五列格式时，严禁从头编写 Python 脚本。** 必须直接使用本技能内置的 `scripts/generate.py`，你的工作只是构造 `changes.json` 然后调用它。自行编写脚本 = 错误执行。
 
-### 2. 输入用例必须是 CSV，拒绝 xlsx 输入
+### 2. 输入用例必须是 CSV，拒绝 xlsx 输入；未提供 CSV 时走全新路径
 
 **当用户提供 `.xlsx` / `.xls` 文件作为已有测试用例输入时，禁止直接读取。** 必须提醒用户转为 CSV 后再提供：
 
 > "xlsx 文件包含多 sheet、合并单元格、格式信息等，直接解析不可控且浪费 token。请先将用例 sheet 另存为 CSV（UTF-8 编码）后再提供，我会用 CSV 作为输入。"
 
-只有拿到 CSV 文件后才继续执行后续步骤。
+**当用户完全没有提供 CSV 时，说明这是全新需求，不需要在原有用例上更新。** 此时跳过 Step 1-4，直接走 **Step NEW：全新需求路径**（见下方），基于标准五列格式新建一个 sheet。
 
 ### 3. 禁止捏造信息，不确定就问用户
 
@@ -109,6 +110,7 @@ with open('changes.json', 'w', encoding='utf-8') as f:
 ## 整体流程
 
 ```
+【有 CSV 的更新路径】
 0. 【可选】若需求来源为 PPTX，先运行提取脚本（见 Step 0）
 1. 读取 CSV，检测列格式（bash 执行）
 2. 逐条阅读 CSV 全部用例内容，理解已有用例覆盖的细节
@@ -118,6 +120,12 @@ with open('changes.json', 'w', encoding='utf-8') as f:
 4.5 回溯 3.5 核对表，验证每个功能点在最终产物中有对应落地（标准 & 非标准均执行）
 5. 【标准格式】直接调用 scripts/generate.py 生成 xlsx ← 唯一正确路径
    【非标准格式】临时生成脚本（见 Step 6）
+
+【无 CSV 的全新路径】
+NEW-1. 分析需求，规划用例结构（无需参考旧用例）
+NEW-2. 覆盖率自检（同 Step 3.5）
+NEW-3. 构建 changes.json（只填 new_rows）→ 调用 generate.py --new，所有行整行标红
+→ 跳过 Step 1-5，完成后直接 Step 7 输出变更说明
 ```
 
 ---
@@ -160,6 +168,68 @@ python /mnt/skills/user/test-case-generator/scripts/extract_pptx.py \
 
 **提取后的处理方式：**
 脚本将每页幻灯片导出为一张完整的 PNG 图片（包含文字、原型图、排版布局），效果等同于手动截图。导出后**必须用 Read 工具逐张查看这些图片**，然后进入 Step 3 的需求分析。
+
+---
+
+## Step NEW：全新需求路径（无 CSV 时使用）
+
+> 当用户没有提供任何 CSV 时，直接走此路径，跳过 Step 1-4，完成后跳到 Step 7 输出变更说明。
+
+### NEW-1：分析需求，规划用例结构
+
+按照 Step 3 的分析方法（文字描述 + 原型图）提取所有功能点，然后规划用例结构：
+
+- 按功能模块分组
+- 每个模块下覆盖：界面检查（UI）、页面跳转、按钮状态、异常路径等
+- 写作风格与颗粒度遵循 Step 3 中「描述与预期的写作风格」要求
+
+### NEW-2：执行覆盖率自检（同 Step 3.5）
+
+逐条列出所有需求功能点，确认每条都有对应用例，输出核对表后才继续。
+
+### NEW-3：构建 changes.json 并调用内置脚本（--new 模式）
+
+**禁止自己写生成脚本**，与有 CSV 的路径一样，统一使用 `scripts/generate.py`，加 `--new` 参数即可。
+
+**changes.json 只需填 `new_rows`**，`modified` 和 `deprecated` 留空即可（`--new` 模式下会自动忽略）：
+
+```python
+import json
+
+changes = {
+    "modified": [],
+    "new_rows": [
+        {
+            "after_module": "模块A",
+            "data": {
+                "模块": "模块A",
+                "用例名称": "UI",
+                "描述": "1. 检查xxx\n2. 检查yyy",
+                "预期": "1. xxx\n2. yyy",
+                "备注": ""
+            }
+        },
+        # ... 更多用例
+    ],
+    "deprecated": []
+}
+
+with open('changes.json', 'w', encoding='utf-8') as f:
+    json.dump(changes, f, ensure_ascii=False, indent=2)
+```
+
+然后调用脚本（**不需要 --input**）：
+
+```bash
+pip install openpyxl pandas --break-system-packages -q
+
+python /mnt/skills/user/test-case-generator/scripts/generate.py \
+  --new \
+  --output output.xlsx \
+  --changes changes.json
+```
+
+脚本会把所有 `new_rows` 写入 xlsx，**所有行整行标红**，样式与有 CSV 时的新增行完全一致。
 
 ---
 
@@ -452,35 +522,19 @@ pip install openpyxl pandas --break-system-packages -q
 ### 标准五列格式（模块 | 用例名称 | 描述 | 预期 | 备注）
 
 ```bash
+# 更新已有用例（有 CSV）
 python /mnt/skills/user/test-case-generator/scripts/generate.py \
   --input <csv路径> \
   --output output.xlsx \
   --changes changes.json
-```
 
-### XRecorder 格式（模块 | 用例名称 | 操作 | 预期 | 优先级 | 备注）
-
-```bash
-python /mnt/skills/user/test-case-generator/scripts/generate_xrecorder.py \
-  --input <csv路径> \
+# 全新需求（无 CSV）—— changes.json 只需填 new_rows
+python /mnt/skills/user/test-case-generator/scripts/generate.py \
+  --new \
   --output output.xlsx \
   --changes changes.json
 ```
 
-**XRecorder changes.json 差异说明：**
-- `modified[].case`：用「用例名称」定位（无需 module 字段）
-- `modified[].col`：A=模块 B=用例名称 C=操作 D=预期 E=优先级 F=备注
-- `new_rows[].after_case`：插入到此用例名称正下方（替代 after_module）
-- `deprecated`：填用例名称字符串列表（替代行索引）
-- 示例文件：`references/XRecorder/changes_example.json`
-
-脚本已内置处理所有细节，无需额外代码：
-- 插入所有 `new_rows` 后自动构建 `(module, case) → excel_row` 查找表，`modified` 按 module+case 精确定位，不受行号偏移影响
-- 新增行插入到正确模块位置并整行标红
-- 修改行黑红混排富文本
-- 废弃行备注标注"已废弃"
-- 富文本颜色/字号 bug 自动修复
-- 表头样式、列宽、行高
 
 ---
 

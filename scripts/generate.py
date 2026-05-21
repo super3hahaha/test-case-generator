@@ -2,20 +2,24 @@
 Test Case Generator - 标准五列格式专用脚本
 列：模块 | 用例名称 | 描述 | 预期 | 备注
 
-用法：
+用法（更新已有用例）：
     python generate.py --input cases.csv --output output.xlsx --changes changes.json
+
+用法（全新需求，无 CSV）：
+    python generate.py --new --output output.xlsx --changes changes.json
+
+    changes.json 只需包含 new_rows，modified / deprecated 会被忽略。
 
 changes.json 格式：
 {
-  "modified": [
+  "modified": [...],   // 更新模式专用，--new 时忽略
+  "new_rows": [
     {
-      "module": "撤销/重做",
-      "case": "重做（Redo）",
-      "col": "C",
-      "runs": [...]
+      "after_module": "模块A",   // --new 时仅用于排序/分组，不需要存在于 CSV
+      "data": {"模块": "模块A", "用例名称": "UI", "描述": "...", "预期": "...", "备注": ""}
     }
   ],
-  ...
+  "deprecated": []     // 更新模式专用，--new 时忽略
 }
 
 注意：
@@ -101,15 +105,19 @@ def load_csv(path):
     return df[COLUMNS].copy()
 
 
+def make_empty_df():
+    """全新模式：返回空的标准五列 DataFrame"""
+    df = pd.DataFrame(columns=COLUMNS)
+    return df
+
+
 def insert_new_rows(df, new_rows):
     df = df.copy()
     df[NEW_ROW_MARKER] = False
     for item in new_rows:
         module = item['after_module']
         row_data = item['data']
-        # 매번 df_filled를 재계산하여 이미 삽입된 새 행들의 모듈명도 반영
         df_filled = df.copy()
-        # 빈 모듈명 ffill: 단, 새로 삽입된 행은 모듈명이 이미 채워져 있음
         filled_module = df_filled['模块'].copy()
         last = ''
         for i in df_filled.index:
@@ -144,22 +152,18 @@ def resolve_modified_map(df, modified_list):
     df_filled = df.copy()
     df_filled['模块'] = df_filled['模块'].replace('', None).ffill()
 
-    # 先收集所有 B 列改名：(module, old_case) -> new_case
     rename_map = {}
     for mod in modified_list:
         if mod.get('col') == 'B' and 'module' in mod and 'case' in mod:
             new_name = ''.join(r['text'] for r in mod['runs'])
             rename_map[(mod['module'].strip(), mod['case'].strip())] = new_name
 
-    # 建立 lookup：(module_filled, case) -> excel_row
-    # 同时为改名的条目登记新旧两个 case 名
     lookup = {}
     for df_idx, row in df_filled.iterrows():
         excel_row = df_idx + 2
         mod = str(row['模块']).strip()
         case = str(row['用例名称']).strip()
         lookup[(mod, case)] = excel_row
-        # 如果这行被改名，也用新名注册
         if (mod, case) in rename_map:
             new_case = rename_map[(mod, case)]
             lookup[(mod, new_case)] = excel_row
@@ -186,10 +190,12 @@ def resolve_modified_map(df, modified_list):
     return modified_map
 
 
-def build_xlsx(df, changes, output_path):
-    deprecated_rows = set(changes.get('deprecated', []))
+def build_xlsx(df, changes, output_path, new_mode=False):
+    deprecated_rows = set() if new_mode else set(changes.get('deprecated', []))
+    modified_list = [] if new_mode else changes.get('modified', [])
+
     df = insert_new_rows(df, changes.get('new_rows', []))
-    modified_map = resolve_modified_map(df, changes.get('modified', []))
+    modified_map = resolve_modified_map(df, modified_list)
 
     wb = Workbook()
     ws = wb.active
@@ -236,16 +242,25 @@ def build_xlsx(df, changes, output_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input', required=True)
+    parser.add_argument('--input', required=False, default=None, help='已有用例 CSV 路径（更新模式）')
     parser.add_argument('--output', required=True)
     parser.add_argument('--changes', required=True)
+    parser.add_argument('--new', action='store_true', help='全新需求模式，不需要 CSV，所有行整行标红')
     args = parser.parse_args()
 
-    df = load_csv(args.input)
+    if args.new:
+        if args.input:
+            print("⚠️  --new 模式下忽略 --input 参数")
+        df = make_empty_df()
+    else:
+        if not args.input:
+            parser.error("更新模式下必须提供 --input CSV 路径；全新需求请使用 --new")
+        df = load_csv(args.input)
+
     with open(args.changes, encoding='utf-8') as f:
         changes = json.load(f)
 
-    build_xlsx(df, changes, args.output)
+    build_xlsx(df, changes, args.output, new_mode=args.new)
 
 
 if __name__ == '__main__':
