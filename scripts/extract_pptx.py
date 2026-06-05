@@ -37,11 +37,17 @@ def parse_slide_range(spec, total):
 
 
 def find_libreoffice():
-    candidates = ['libreoffice', 'soffice']
+    # Windows 上 soffice.exe 是 GUI 启动器，subprocess 调用 --version 会弹
+    # "Press Enter to continue" 控制台窗口并阻塞。soffice.com 是控制台变体，
+    # 静默运行，必须优先匹配 .com。
     if sys.platform == 'win32':
+        candidates = []
         for base in [os.environ.get('PROGRAMFILES', r'C:\Program Files'),
                      os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)')]:
-            candidates.append(os.path.join(base, 'LibreOffice', 'program', 'soffice.exe'))
+            candidates.append(os.path.join(base, 'LibreOffice', 'program', 'soffice.com'))
+        candidates += ['soffice.com', 'soffice', 'libreoffice']
+    else:
+        candidates = ['libreoffice', 'soffice']
     for cmd in candidates:
         try:
             subprocess.run([cmd, '--version'], capture_output=True, timeout=10)
