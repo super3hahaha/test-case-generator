@@ -1,15 +1,16 @@
 """
-PPTX 需求文档提取脚本 — 将每页幻灯片导出为完整 PNG 截图
+需求文档提取脚本 — 将每页幻灯片导出为完整 PNG 截图
 
 用法：
     python extract_pptx.py --input requirements.pptx [--slides 1-3,5,7-9] [--outdir pptx_output]
+    python extract_pptx.py --input requirements.pdf  [--slides 1-3,5,7-9] [--outdir pptx_output]
 
 输出：
     outdir/ 下每页一张 PNG 图片（如 slide_1.png, slide_2.png），供 LLM 用 Read 工具直接查看
 
 依赖：
     - pip: PyMuPDF (fitz)
-    - 系统: LibreOffice（用于 pptx → pdf 转换）
+    - 仅 PPTX 输入时需要系统安装 LibreOffice（用于 pptx → pdf 转换）
 """
 
 import argparse
@@ -57,32 +58,7 @@ def find_libreoffice():
     return None
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input', required=True, help='PPTX 文件路径')
-    parser.add_argument('--slides', default=None, help='页码范围，如 1-3,5,7-9')
-    parser.add_argument('--outdir', default='pptx_output', help='图片输出目录')
-    parser.add_argument('--dpi', type=int, default=200, help='导出图片 DPI（默认 200）')
-    parser.add_argument('--info', action='store_true', help='仅输出 PPTX 页数信息，不执行导出')
-    args = parser.parse_args()
-
-    pptx_path = os.path.abspath(args.input)
-    if not os.path.exists(pptx_path):
-        print(f"ERROR: 文件不存在：{pptx_path}")
-        sys.exit(1)
-
-    # --info 模式：只输出页数，不需要 LibreOffice
-    if args.info:
-        from pptx import Presentation
-        prs = Presentation(pptx_path)
-        total = len(prs.slides)
-        print(f"📊 PPTX 共 {total} 页")
-        sys.exit(0)
-
-    os.makedirs(args.outdir, exist_ok=True)
-    outdir = os.path.abspath(args.outdir)
-
-    # Step 1: pptx → pdf via LibreOffice
+def pptx_to_pdf(pptx_path, outdir):
     lo = find_libreoffice()
     if not lo:
         print("ERROR: 未找到 LibreOffice。请安装 LibreOffice：https://www.libreoffice.org/download/")
@@ -103,11 +79,14 @@ def main():
         print(f"ERROR: PDF 文件未生成：{pdf_path}")
         sys.exit(1)
 
-    # Step 2: pdf → per-page PNG via PyMuPDF
+    return pdf_path
+
+
+def pdf_to_images(pdf_path, outdir, slides_spec, dpi, cleanup_pdf=False):
     import fitz
     doc = fitz.open(pdf_path)
     total = len(doc)
-    selected = parse_slide_range(args.slides, total)
+    selected = parse_slide_range(slides_spec, total)
 
     exported = []
     for i in range(total):
@@ -115,14 +94,60 @@ def main():
         if page_num not in selected:
             continue
         page = doc[i]
-        pix = page.get_pixmap(dpi=args.dpi)
+        pix = page.get_pixmap(dpi=dpi)
         out_path = os.path.join(outdir, f'slide_{page_num}.png')
         pix.save(out_path)
         exported.append(out_path)
         print(f"📄 Slide {page_num}/{total} → {out_path}")
 
     doc.close()
-    os.remove(pdf_path)
+    if cleanup_pdf:
+        os.remove(pdf_path)
+
+    return exported, total
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', required=True, help='PPTX 或 PDF 文件路径')
+    parser.add_argument('--slides', default=None, help='页码范围，如 1-3,5,7-9')
+    parser.add_argument('--outdir', default='pptx_output', help='图片输出目录')
+    parser.add_argument('--dpi', type=int, default=200, help='导出图片 DPI（默认 200）')
+    parser.add_argument('--info', action='store_true', help='仅输出页数信息，不执行导出')
+    args = parser.parse_args()
+
+    input_path = os.path.abspath(args.input)
+    if not os.path.exists(input_path):
+        print(f"ERROR: 文件不存在：{input_path}")
+        sys.exit(1)
+
+    ext = os.path.splitext(input_path)[1].lower()
+
+    # --info 模式
+    if args.info:
+        if ext == '.pdf':
+            import fitz
+            doc = fitz.open(input_path)
+            total = len(doc)
+            doc.close()
+        else:
+            from pptx import Presentation
+            prs = Presentation(input_path)
+            total = len(prs.slides)
+        print(f"📊 共 {total} 页")
+        sys.exit(0)
+
+    os.makedirs(args.outdir, exist_ok=True)
+    outdir = os.path.abspath(args.outdir)
+
+    if ext == '.pdf':
+        # PDF 直接渲染，无需 LibreOffice
+        print(f"📄 输入为 PDF，直接渲染图片...")
+        exported, total = pdf_to_images(input_path, outdir, args.slides, args.dpi, cleanup_pdf=False)
+    else:
+        # PPTX 先转 PDF，再渲染
+        pdf_path = pptx_to_pdf(input_path, outdir)
+        exported, total = pdf_to_images(pdf_path, outdir, args.slides, args.dpi, cleanup_pdf=True)
 
     print(f"\n✅ 导出完成：{len(exported)}/{total} 页")
     print(f"📁 图片目录：{outdir}")
