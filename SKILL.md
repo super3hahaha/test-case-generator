@@ -160,8 +160,6 @@ python /mnt/skills/user/test-case-generator/scripts/extract_pptx.py \
   --outdir pptx_output
 ```
 
-**系统依赖：** 需安装 [LibreOffice](https://www.libreoffice.org/download/)（用于 pptx → pdf 转换）
-
 **参数说明：**
 - `--slides`：页码范围（如 `1-3,5,7-9`）
 - `--outdir`：图片输出目录，默认 `pptx_output`
