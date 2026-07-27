@@ -12,27 +12,13 @@ description: >
 
 # Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
 
-**当前版本：v1.9.4**
+**当前版本：v1.9.6**
 
-## 第零步：加载产品偏好（可选）
+## 第零步：应用偏好约定（可选）
 
-skill 支持按产品加载差异化偏好，偏好文件存放于：
+若 prompt 中包含 `Preference files (apply these conventions):` 段落，则逐个 **Read** 列出的文件路径，将其中的约定（颗粒度、分群、模块命名、必测通则等）应用于后续所有分析与输出。
 
-```
-references/
-└── <产品名>/
-    └── preferences.md   ← 该产品的偏好与约定
-```
-
-**触发规则**：上下文中可识别产品名称时（如用户提到「XRecorder」、CSV 文件名含产品名等）→ **自动读取**对应 `preferences.md`，将其中的颗粒度、分群、模块命名等约定应用于后续所有分析与输出。
-
-**已有偏好文件**：
-
-| 产品 | 路径 |
-|------|------|
-| XRecorder | `references/XRecorder/preferences.md` |
-
-> 💡 新增产品：在 `references/` 下新建 `<产品名>/preferences.md`，参考 XRecorder 模板编写。
+偏好文件由 tester-app 知识库管理，通过显式路径传入——skill 不再自动按产品名查找 `references/` 目录。
 
 ---
 
