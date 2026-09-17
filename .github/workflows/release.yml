@@ -25,8 +25,22 @@ jobs:
             SKILL.md scripts/ \
             -x '*.git*'
 
+      - name: Extract release notes from WHATSNEW.md
+        run: |
+          VER="${{ steps.version.outputs.tag }}"
+          awk -v ver="$VER" '
+            $0 ~ "^## "ver"([ ·]|$)" { flag=1; next }
+            flag && /^## / { exit }
+            flag { print }
+          ' WHATSNEW.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "未在 WHATSNEW.md 中找到 $VER 的段落，见下方自动生成的变更列表。" > RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: test-case-generator-${{ steps.version.outputs.tag }}.skill
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
