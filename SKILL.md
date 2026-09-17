@@ -13,7 +13,7 @@ description: >
 
 # Test Case Generator: CSV + 需求截图/PPTX/HTML → 标红 xlsx
 
-**当前版本：v1.11.0**
+**当前版本：v2.0.0**
 
 ## 第零步：应用偏好约定（可选）
 
