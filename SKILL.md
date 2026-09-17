@@ -8,11 +8,12 @@ description: >
   standard five-column format (模块 | 用例名称 | 描述 | 预期 | 备注) in a new sheet, with all rows in red.
   Trigger whenever the user mentions "测试用例", "用例更新", "需求变更", "标红新增", "生成用例", "帮我写用例",
   or uploads/describes requirements asking for an Excel test case output — even without any existing CSV.
+  需求来源支持：截图 / PPTX / PDF / 单文件 HTML 需求文档（HTML 必须先跑 scripts/extract_html.py 提取，禁止直接 Read）。
 ---
 
-# Test Case Generator: CSV + 需求截图/PPTX → 标红 xlsx
+# Test Case Generator: CSV + 需求截图/PPTX/HTML → 标红 xlsx
 
-**当前版本：v1.9.6**
+**当前版本：v1.11.0**
 
 ## 第零步：应用偏好约定（可选）
 
@@ -91,17 +92,37 @@ with open('changes.json', 'w', encoding='utf-8') as f:
 # create_file("changes.json", '{"text": "文案"Cutter"", "red": true}')
 ```
 
+### 6. 禁止直接 Read HTML 需求文档，必须先跑提取脚本
+
+**拿到 `.html` / `.htm` 需求文档时，严禁用 Read 工具打开原文件。**
+
+需求 HTML 是自包含单文件：正文通常只有一两万字符，但 CSS + 内嵌 base64 原型图会把文件撑到几 MB
+（实测一份 MP3 Cutter 需求：2.7MB 原文件，正文仅 1.8 万字符，其余 99% 是样式和 24 张 base64 图）。
+**直接 Read 会一次性撑爆上下文，任务当场作废，且没有任何补救办法。**
+
+```bash
+# ✅ 正确：先提取，再读提取产物
+python <skill>/scripts/extract_html.py --input 需求.html --outdir html_output
+# 然后 Read html_output/prd.md，图片按锚点按需 Read
+
+# ❌ 严禁：Read 需求.html
+```
+
+同理，**图片也不要全部 Read**。`prd.md` 末尾有「图片清单」标注了每张图对应的模块，
+分析到哪个模块就读哪张，不要开局把 20+ 张原型图全读一遍。
+
 ---
 
 ## 整体流程
 
 ```
 【有 CSV 的更新路径】
-0. 【可选】若需求来源为 PPTX/PDF，先运行提取脚本（见 Step 0）
+0. 【可选】若需求来源为 PPTX/PDF/HTML，先运行提取脚本（见 Step 0）
    ⚡ 若 prompt 里是 `Image (new requirements): <路径>`，图片已由 tester-app 导出，跳过 Step 0，直接 Read 图片进入 Step 3
+   ⚠️ 若 prompt 里是 `HTML (new requirements): <路径>`，走 Step 0 路径 D，**绝不可直接 Read 该 html**
 1. 读取 CSV，检测列格式（bash 执行）
 2. 逐条阅读 CSV 全部用例内容，提取模块-用例层级结构并输出，理解已有用例覆盖的细节
-3. 分析新需求（截图/文字描述/PPTX 提取内容），结合 CSV 已有内容对比补充
+3. 分析新需求（截图/文字描述/PPTX 或 HTML 提取内容），结合 CSV 已有内容对比补充
 3.3 ⭐ 将变更后完整用例结构输出（树形），等用户确认后再继续
 3.5 覆盖率自检，确保所有需求功能点都有用例覆盖
 4. 分类变更，用 Python dict 构造 changes.json（标准格式）或准备用例数据（非标准格式）
@@ -133,6 +154,92 @@ tester-app 已完成 PDF 导出 + 页码裁剪，**直接跳到 Step 0.3 Read �
 ### 路径 C：PPTX 文件（`PPTX (new requirements): <路径>.pptx`）
 
 同路径 B，extract_prd.py 会自动先将 PPTX 转为 PDF 再提取截图。
+
+### 路径 D：HTML 文件（`HTML (new requirements): <路径>.html`）
+
+**⛔ 先看关键规则 6：绝不允许 Read 这个 html 原文件。** 进入 Step 0.H。
+
+---
+
+### Step 0.H：HTML 需求文档提取（路径 D 专用）
+
+HTML 走的是「正文文本 + 按需读原型图」，**比 PPT 截图路线更准**：断点数值、规则表、
+公式都是直读文本，不存在从截图里看错数字的问题。
+
+HTML 没有页码，但有章节。`--sections` 就是 PPT 路径 `--slides` 的等价物，
+**「先做 1-10 页，再做 11-15 页」的分批节奏原样适用，只是把「页」换成「章节」。**
+
+#### Step 0.H.1：列章节目录，确认这次做哪几节
+
+**用户未指定范围时，禁止直接全文提取。** 必须先列目录并询问：
+
+```bash
+pip install beautifulsoup4 --break-system-packages -q
+
+python /mnt/skills/user/test-case-generator/scripts/extract_html.py \
+  --input <html路径> --info
+```
+
+输出形如：
+
+```
+📑 章节目录（分节依据：<section> 标签，共 7 节）：
+    1. §1 需求概述           约 1011 字符 | 图 0 张
+    2. §2 全局宽布局框架     约 7469 字符 | 图 20 张
+    3. §3 弹窗专章           约 1795 字符 | 图 4 张
+    ...
+```
+
+拿到目录后，**必须询问用户**：
+> "这份需求共 N 节：①… ②… ③…。这次要分析哪几节？（如 2,3）
+> 可以像以前按页码分批那样，一次做一个模块，做完再继续下一批。"
+
+若脚本提示「没有可识别的章节结构，只能整篇处理」，就如实告诉用户这份文档无法分批，
+并给出正文总字数，让用户决定是否整篇跑。
+
+#### Step 0.H.2：按章节提取
+
+```bash
+python /mnt/skills/user/test-case-generator/scripts/extract_html.py \
+  --input <html路径> \
+  --sections <章节范围> \
+  --outdir html_output
+```
+
+**参数说明：**
+- `--sections`：章节编号范围，语法同页码（`1-3,5`）。省略 = 全文
+- `--outdir`：输出目录，默认 `html_output`
+- `--info`：只列目录不写文件
+
+**产物：**
+- `html_output/prd_s2-3.md` —— 只含选中章节的正文（全文提取时是 `prd.md`）
+- `html_output/images/img_NN.jpg` —— 该章节内的原型图
+- 正文里图片原位留 `[[IMAGE: images/img_21.jpg]] alt=居中弹窗` 锚点，文件末尾附图片清单
+
+**分批时注意：** 图片编号是**全文全局**的（§3 的图就是 img_21~24），
+不同批次的 md 文件名也带章节后缀，**多轮提取到同一个 outdir 不会互相覆盖**。
+
+#### Step 0.H.3：读提取产物
+
+1. **Read 本批的 `prd_sN.md`（整份读完）** —— 这是需求正文，必须全读
+2. 看末尾图片清单，**按模块按需 Read 图片**。分析「Cutter 编辑页」就读 `alt=Cutter编辑页` 那张，
+   不要开局把 20 多张全读一遍
+3. 进入 Step 3 需求分析
+
+#### 下一批怎么接
+
+用户说「继续做下一个模块」时，**不要重跑 --info，也不要重读已做过的章节**，
+直接对新章节跑 Step 0.H.2 即可（`--sections 4,5`），产物落在同一 outdir，
+已生成的 xlsx 与前一批用例保持连续。
+
+#### 脚本告警要当真，不要无视继续
+
+| 告警 | 含义 | 处理 |
+|---|---|---|
+| 正文过短（<500 字符） | 多半是 JS 动态渲染的页面，静态解析拿不到内容 | 停下来告诉用户，请其提供静态导出版或整页截图 |
+| 未解析到表格 | 可能是 div 伪表格（Notion / 飞书导出常见） | 正文里的数值排布要人工复核，必要时问用户 |
+| 本次章节内没有图片 | 可能选错章节 | 与用户确认这批是否该有原型图 |
+| 有外链图片未取回 | 正文中标为 `[[IMAGE-EXTERNAL]]` | 明确告诉用户哪几张没拿到，别假装看过 |
 
 ---
 
@@ -229,6 +336,8 @@ python /mnt/skills/user/test-case-generator/scripts/generate.py \
   --output output.xlsx \
   --changes changes.json
 ```
+
+用户指定了 sheet 名时追加 `--sheet-name "<名称>"`。
 
 脚本会把所有 `new_rows` 写入 xlsx，**所有行整行标红**，样式与有 CSV 时的新增行完全一致。
 
@@ -643,6 +752,10 @@ python /mnt/skills/user/test-case-generator/scripts/generate.py \
   --new \
   --output output.xlsx \
   --changes changes.json
+
+# 自定义 sheet 名（两种模式通用，默认 Sheet）
+# 用户指定了 sheet 名就必须带上，不要生成后再用 openpyxl 改名——会撤销标红修补
+  --sheet-name "target36横屏适配"
 ```
 
 
@@ -660,26 +773,37 @@ openpyxl 写入富文本有两个 bug，**必须用 XML 修补方式绕过**：
 |-----|------|------|
 | 颜色透明 | 内容存在但不可见 | `InlineFont(color='EA4335')` 写入 `rgb="00EA4335"`，alpha=00 透明 |
 | 字体超大 | 内容撑满格子看不见 | `InlineFont(sz=1000)` 单位是半点，1000=500pt |
+| 整行标红透明 | 新增行看着像空白 | 普通 `Font(color='EA4335')` 落在 **styles.xml**，同样写成 alpha=00；只修 sheet1.xml 修不到它 |
 
 **修复函数（必须包含在临时脚本中）：**
 
 ```python
 import zipfile, shutil, os
 
+import re
+
 def fix_rich_text_xlsx(filepath):
     tmp = filepath + '.tmp'
     shutil.copy(filepath, tmp)
     with zipfile.ZipFile(tmp, 'r') as z:
-        sheet_bytes = z.read('xl/worksheets/sheet1.xml')
         all_files = {n: z.read(n) for n in z.namelist()}
-    fixed = sheet_bytes.replace(b'rgb="00000000"', b'rgb="FF000000"')
+    os.remove(tmp)
+
+    # 富文本（sheet1.xml）
+    fixed = all_files['xl/worksheets/sheet1.xml']
+    fixed = fixed.replace(b'rgb="00000000"', b'rgb="FF000000"')
     fixed = fixed.replace(b'rgb="00EA4335"', b'rgb="FFEA4335"')
     fixed = fixed.replace(b'<sz val="1000"/>', b'<sz val="10"/>')
     all_files['xl/worksheets/sheet1.xml'] = fixed
+
+    # 普通字体与填充（styles.xml）—— 整行标红靠这条
+    styles = all_files['xl/styles.xml'].decode('utf-8')
+    styles = re.sub(r'rgb="00([0-9A-Fa-f]{6})"', r'rgb="FF\1"', styles)
+    all_files['xl/styles.xml'] = styles.encode('utf-8')
+
     with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in all_files.items():
             zout.writestr(name, data)
-    os.remove(tmp)
 ```
 
 **富文本写入方式：**
@@ -729,7 +853,7 @@ fix_rich_text_xlsx(output_path)
 
 1. **格式检测优先**：每次收到 CSV 后，第一步必须检测列名，决定走哪条路径
 2. **修改行必须保留全部原有内容**：只插入新增/变更部分并标红，不得丢弃原有步骤
-3. **颜色修复必须在 `wb.save()` 之后执行**
+3. **颜色修复必须在 `wb.save()` 之后执行**，且要同时修 `sheet1.xml`（富文本）和 `styles.xml`（普通字体/填充）；任何时候都不要在修复后再用 openpyxl 重新 save，会把修补原样写回去
 4. **新增行整行用 `Font(color='EA4335')`**，不需要富文本
 5. **修改行只标红新增部分**，原有文字保持黑色
 6. **用词风格**：描述用简洁操作动词（查看/检查/点击），不用「是否为」判断句；预期直接写结论状态，不用模糊的「正确显示」，与原有用例颗粒度和句式保持一致

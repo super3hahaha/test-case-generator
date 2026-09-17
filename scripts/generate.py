@@ -10,6 +10,9 @@ Test Case Generator - 标准五列格式专用脚本
 
     changes.json 只需包含 new_rows，modified / deprecated 会被忽略。
 
+两种模式通用的可选参数：
+    --sheet-name "自定义sheet名"    输出 sheet 名称，默认 Sheet
+
 changes.json 格式：
 {
   "modified": [...],   // 更新模式专用，--new 时忽略
@@ -31,8 +34,10 @@ changes.json 格式：
 import argparse
 import json
 import os
+import re
 import shutil
 import zipfile
+from xml.sax.saxutils import escape as xml_escape
 
 import pandas as pd
 from openpyxl import Workbook
@@ -49,22 +54,59 @@ DEPRECATED_NOTE = '已废弃'
 NEW_ROW_MARKER = '__is_new__'
 
 
-# ── 富文本修复 ──────────────────────────────────────────────
+# ── 保存后的 XML 修补 ────────────────────────────────────────
 
-def fix_rich_text_xlsx(filepath):
+INVALID_SHEET_CHARS = r'[:\\/?*\[\]]'
+
+
+def sanitize_sheet_name(name):
+    """Excel 限制：≤31 字符，不得含 : \ / ? * [ ]"""
+    cleaned = re.sub(INVALID_SHEET_CHARS, '_', name).strip()
+    if not cleaned:
+        raise ValueError('sheet 名不能为空')
+    return cleaned[:31]
+
+
+def finalize_xlsx(filepath, sheet_name=None):
+    """openpyxl 保存后必须跑的 zip 层修补，三件事：
+
+    1. sheet1.xml 富文本：InlineFont 写出的 alpha=00（透明）、sz 单位为半点
+    2. styles.xml 普通字体/填充：同样被写成 alpha=00 —— 新增行整行标红全靠这条，
+       只修 sheet1.xml 的话红色在部分阅读器里是透明的，内容看着像空白
+    3. sheet 改名
+
+    三件都只能在 zip 层做：openpyxl 一旦重新 save，1、2 的修补会被原样写回去。
+    """
     tmp = filepath + '.tmp'
     shutil.copy(filepath, tmp)
     with zipfile.ZipFile(tmp, 'r') as z:
-        sheet_bytes = z.read('xl/worksheets/sheet1.xml')
         all_files = {n: z.read(n) for n in z.namelist()}
-    fixed = sheet_bytes.replace(b'rgb="00000000"', b'rgb="FF000000"')
-    fixed = fixed.replace(b'rgb="00EA4335"', b'rgb="FFEA4335"')
-    fixed = fixed.replace(b'<sz val="1000"/>', b'<sz val="10"/>')
-    all_files['xl/worksheets/sheet1.xml'] = fixed
+    os.remove(tmp)
+
+    sheet_xml = all_files['xl/worksheets/sheet1.xml']
+    sheet_xml = sheet_xml.replace(b'rgb="00000000"', b'rgb="FF000000"')
+    sheet_xml = sheet_xml.replace(b'rgb="00EA4335"', b'rgb="FFEA4335"')
+    sheet_xml = sheet_xml.replace(b'<sz val="1000"/>', b'<sz val="10"/>')
+    all_files['xl/worksheets/sheet1.xml'] = sheet_xml
+
+    styles = all_files['xl/styles.xml'].decode('utf-8')
+    styles = re.sub(r'rgb="00([0-9A-Fa-f]{6})"', r'rgb="FF\1"', styles)
+    all_files['xl/styles.xml'] = styles.encode('utf-8')
+
+    if sheet_name:
+        wb_xml = all_files['xl/workbook.xml'].decode('utf-8')
+        safe = xml_escape(sanitize_sheet_name(sheet_name), {'"': '&quot;'})
+        wb_xml, hit = re.subn(
+            r'(<sheet\b[^>]*?\bname=")[^"]*(")',
+            lambda m: m.group(1) + safe + m.group(2),
+            wb_xml, count=1)
+        if not hit:
+            print('⚠️  未定位到 sheet 名节点，sheet 名保持默认')
+        all_files['xl/workbook.xml'] = wb_xml.encode('utf-8')
+
     with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zout:
         for name, data in all_files.items():
             zout.writestr(name, data)
-    os.remove(tmp)
 
 
 # ── 富文本写入 ──────────────────────────────────────────────
@@ -190,7 +232,7 @@ def resolve_modified_map(df, modified_list):
     return modified_map
 
 
-def build_xlsx(df, changes, output_path, new_mode=False):
+def build_xlsx(df, changes, output_path, new_mode=False, sheet_name=None):
     deprecated_rows = set() if new_mode else set(changes.get('deprecated', []))
     modified_list = [] if new_mode else changes.get('modified', [])
 
@@ -234,7 +276,7 @@ def build_xlsx(df, changes, output_path, new_mode=False):
         ws.row_dimensions[excel_row].height = 60
 
     wb.save(output_path)
-    fix_rich_text_xlsx(output_path)
+    finalize_xlsx(output_path, sheet_name)
     print(f"✅ 已生成：{output_path}")
 
 
@@ -246,6 +288,7 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--changes', required=True)
     parser.add_argument('--new', action='store_true', help='全新需求模式，不需要 CSV，所有行整行标红')
+    parser.add_argument('--sheet-name', default=None, help='输出 sheet 名称，默认 Sheet')
     args = parser.parse_args()
 
     if args.new:
@@ -260,7 +303,7 @@ def main():
     with open(args.changes, encoding='utf-8') as f:
         changes = json.load(f)
 
-    build_xlsx(df, changes, args.output, new_mode=args.new)
+    build_xlsx(df, changes, args.output, new_mode=args.new, sheet_name=args.sheet_name)
 
 
 if __name__ == '__main__':
